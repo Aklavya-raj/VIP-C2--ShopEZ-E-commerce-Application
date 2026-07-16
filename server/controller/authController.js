@@ -1,5 +1,8 @@
 const User = require('../model/User');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE });
@@ -98,4 +101,53 @@ const updateProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getProfile, updateProfile };
+// @desc Google OAuth Login
+// @route POST /api/auth/google
+const googleLogin = async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ message: 'No credential provided' });
+
+    console.log('🔑 Google login attempt, verifying token...');
+    console.log('Client ID used:', process.env.GOOGLE_CLIENT_ID);
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    console.log('✅ Token verified for:', payload.email);
+
+    const { name, email, picture, sub: googleId } = payload;
+
+    let user = await User.findOne({ email });
+    if (!user) {
+      user = await User.create({
+        name,
+        email,
+        password: googleId + process.env.JWT_SECRET,
+        googleId,
+        avatar: picture,
+        cart: []
+      });
+      console.log('✅ New user created via Google:', email);
+    } else {
+      console.log('✅ Existing user logged in via Google:', email);
+    }
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      avatar: picture,
+      role: user.role,
+      token: generateToken(user._id)
+    });
+  } catch (error) {
+    console.error('❌ Google auth error:', error.message);
+    res.status(401).json({ message: 'Google authentication failed', detail: error.message });
+  }
+};
+
+module.exports = { register, login, getProfile, updateProfile, googleLogin };
+
